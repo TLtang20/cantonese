@@ -1,0 +1,6 @@
+{
+  "name": "粵拼易學堂 (Jyutping Snap & Speak)",
+  "description": "專為非華語學生設計的日常拍照粵語發音與粵拼學習工具，即時在中文字下方標註標準粵拼，並提供真人自然粵語發音與聲調練習。",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
