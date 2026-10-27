@@ -1,6 +1,7 @@
 /**
  * Audio Service for Cantonese Pronunciation
- * Combines high-fidelity Gemini 3.8 Flash Lite TTS and Web Speech API (zh-HK)
+ * Prioritizes high-speed local Cantonese (zh-HK) speech synthesis,
+ * with graceful fallback to server-side Gemini audio.
  */
 
 type AudioCallback = (isPlaying: boolean, activeText?: string) => void;
@@ -10,12 +11,24 @@ class AudioService {
   private audioCache = new Map<string, string>(); // text -> blobUrl
   private listeners: AudioCallback[] = [];
   private activeText: string | null = null;
-  private preferredEngine: 'auto' | 'gemini' | 'browser' = 'auto';
+  private voicesLoaded = false;
+
+  constructor() {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = () => {
+        this.voicesLoaded = true;
+      };
+      // Trigger voice load
+      window.speechSynthesis.getVoices();
+    }
+  }
 
   // Find native browser Cantonese voice
   public getCantoneseVoice(): SpeechSynthesisVoice | null {
     if (typeof window === 'undefined' || !window.speechSynthesis) return null;
     const voices = window.speechSynthesis.getVoices();
+    if (!voices || voices.length === 0) return null;
+
     // Prioritize zh-HK or cantonese
     const hkVoice = voices.find(
       (v) =>
@@ -23,7 +36,9 @@ class AudioService {
         v.lang === 'yue-Hant-HK' ||
         v.lang === 'zh_HK' ||
         v.name.toLowerCase().includes('cantonese') ||
-        v.name.toLowerCase().includes('hong kong')
+        v.name.toLowerCase().includes('hong kong') ||
+        v.name.toLowerCase().includes('粵語') ||
+        v.name.toLowerCase().includes('广东话')
     );
     if (hkVoice) return hkVoice;
 
@@ -64,59 +79,41 @@ class AudioService {
    * Speak Cantonese text
    * @param text The Chinese word or phrase to pronounce
    * @param speed Playback speed (0.75 for slow practice, 1.0 for normal)
-   * @param forceEngine Optional engine override
    */
-  public async speak(
-    text: string,
-    speed: number = 1.0,
-    forceEngine?: 'gemini' | 'browser'
-  ): Promise<void> {
+  public async speak(text: string, speed: number = 1.0): Promise<void> {
     this.stop();
-    if (!text.trim()) return;
+    if (!text || !text.trim()) return;
 
     this.notify(true, text);
 
-    const engine = forceEngine || this.preferredEngine;
+    // 1. Try Browser SpeechSynthesis (zh-HK) first: instant, reliable, zero-quota
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      try {
+        const voice = this.getCantoneseVoice();
+        await this.speakWithBrowser(text, speed, voice);
+        return;
+      } catch (browserErr) {
+        console.warn('Browser speech synthesis error, trying cached/server audio', browserErr);
+      }
+    }
 
-    // First attempt: If Gemini TTS is requested or in auto mode with cache
+    // 2. Try Cache if available
     const cacheKey = `${text}_${speed}`;
     if (this.audioCache.has(cacheKey)) {
       try {
         await this.playAudioUrl(this.audioCache.get(cacheKey)!, speed, text);
         return;
       } catch (err) {
-        console.warn('Cache playback failed, falling back to live speech', err);
+        console.warn('Cache playback failed', err);
       }
     }
 
-    // Try Gemini TTS first if specified
-    if (engine === 'gemini') {
-      try {
-        await this.speakWithGemini(text, speed);
-        return;
-      } catch (err) {
-        console.warn('Gemini TTS failed, falling back to Browser voice', err);
-      }
-    }
-
-    // Attempt browser Web Speech API with zh-HK
-    const browserVoice = this.getCantoneseVoice();
-    if (browserVoice || engine === 'browser') {
-      try {
-        await this.speakWithBrowser(text, speed, browserVoice);
-        return;
-      } catch (err) {
-        console.warn('Browser TTS failed, trying Gemini API', err);
-      }
-    }
-
-    // Fallback: Try Gemini API
+    // 3. Try Gemini TTS as secondary fallback
     try {
       await this.speakWithGemini(text, speed);
     } catch (err) {
-      console.error('All TTS attempts failed:', err);
+      console.warn('Server TTS not available, notifying completion', err);
       this.notify(false);
-      throw err;
     }
   }
 
@@ -146,7 +143,12 @@ class AudioService {
 
       utterance.onerror = (e) => {
         this.notify(false);
-        reject(e);
+        // Do not reject on cancel
+        if (e.error === 'canceled' || e.error === 'interrupted') {
+          resolve();
+        } else {
+          reject(e);
+        }
       };
 
       window.speechSynthesis.speak(utterance);

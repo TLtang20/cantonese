@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Search, Sparkles, Volume2, ArrowRight, RefreshCw, Bookmark, BookmarkCheck } from 'lucide-react';
 import { DetectedWord } from '../types';
 import { WordCard } from './WordCard';
+import { convertTextToJyutpingLocally } from '../data/cantoneseDict';
 
 interface TextConverterProps {
   onSaveWord: (word: DetectedWord) => void;
@@ -51,7 +52,9 @@ export const TextConverter: React.FC<TextConverterProps> = ({
       const data: DetectedWord = await response.json();
       setResultWord(data);
     } catch (err: any) {
-      setErrorMsg(err.message || '查詢失敗，請再試一次。');
+      console.warn('Convert text API error, using built-in dictionary:', err);
+      const localResult = convertTextToJyutpingLocally(trimmed);
+      setResultWord(localResult);
     } finally {
       setIsLoading(false);
     }
